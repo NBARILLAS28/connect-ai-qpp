@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0b0f14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Mando PC">
+<link rel="manifest" href="/manifest.webmanifest" id="lnkManifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/icon-192.png">
+<link rel="stylesheet" href="/style.css">
+<title>Mando PC</title>
+</head>
+<body>
+
+<div id="app">
+  <header id="top">
+    <span id="dot" class="dot off"></span>
+    <b id="host">Mando PC</b>
+    <span id="ms" class="muted"></span>
+    <span class="grow"></span>
+    <span id="bat" class="muted"></span>
+  </header>
+
+  <main>
+    <!-- ───── PANTALLA ───── -->
+    <section id="tab-pantalla" class="tab on">
+      <div id="stage">
+        <canvas id="cv"></canvas>
+        <div id="msg">Conectando…</div>
+      </div>
+      <div id="bar">
+        <div class="seg" id="modos">
+          <button data-modo="pad" title="Touchpad">Touchpad</button>
+          <button data-modo="touch" title="Tocar directo">Tocar</button>
+          <button data-modo="view" title="Zoom y mover vista">Zoom</button>
+        </div>
+        <button class="b acento" id="bKb" aria-label="Teclado">⌨︎ Teclado</button>
+        <button class="b" id="bClicL">Clic</button>
+        <button class="b" id="bClicR">Clic der.</button>
+        <button class="b tog" id="bArr">Arrastrar</button>
+        <button class="b" id="bMon" hidden>🖥 1</button>
+      </div>
+      </section>
+
+    <!-- ───── TECLADO ───── -->
+    <section id="tab-teclado" class="tab scroll">
+      <div class="col">
+        <button class="grande acento" id="bKbVivo">⌨︎ Escribir en vivo</button>
+        <p class="muted peq">Abre el teclado del celular y todo lo que teclees aparece en la laptop al instante.</p>
+
+        <h4>Texto largo</h4>
+        <textarea id="txtLargo" rows="3" placeholder="Escribe o pega aquí un texto para enviarlo…" autocapitalize="sentences"></textarea>
+        <div class="fila">
+          <button class="b" id="bEscribir">Escribir</button>
+          <button class="b" id="bPegar">Pegar (rápido)</button>
+          <label class="chk"><input type="checkbox" id="chkEnter"> + Enter</label>
+        </div>
+
+        <h4>Modificadores <span class="muted peq">(tócalos y luego una tecla)</span></h4>
+        <div class="fila" id="mods"></div>
+
+        <h4>Teclas</h4>
+        <div class="grid g5" id="teclasFijas"></div>
+        <div class="flechas" id="flechas"></div>
+        <div class="fila scrollx" id="teclasF"></div>
+
+        <h4>Atajos de teclado</h4>
+        <div class="grid g3" id="atajosKb"></div>
+
+        <h4>Portapapeles de la laptop</h4>
+        <div class="fila">
+          <button class="b" id="bTraerClip">Traer lo copiado</button>
+        </div>
+        <textarea id="txtClip" rows="3" placeholder="Aquí aparece lo que tienes copiado en la laptop" readonly></textarea>
+        <div class="fila"><button class="b" id="bCopiarClip">Copiar en el celular</button></div>
+      </div>
+    </section>
+
+    <!-- ───── CONTROL ───── -->
+    <section id="tab-control" class="tab scroll">
+      <div class="col">
+        <h4>Volumen y multimedia</h4>
+        <div class="grid g3">
+          <button class="b" data-act="vol_down">🔉 Bajar</button>
+          <button class="b" data-act="mute">🔇 Silencio</button>
+          <button class="b" data-act="vol_up">🔊 Subir</button>
+          <button class="b" data-act="prev">⏮︎ Anterior</button>
+          <button class="b" data-act="play">⏯︎ Play/Pausa</button>
+          <button class="b" data-act="next">⏭︎ Siguiente</button>
+        </div>
+
+        <h4>Mis atajos</h4>
+        <div class="grid g2" id="misAtajos"></div>
+
+        <h4>Abrir enlace en la laptop</h4>
+        <div class="fila">
+          <input id="inUrl" type="url" inputmode="url" placeholder="https://…" autocapitalize="none" autocorrect="off" spellcheck="false">
+          <button class="b acento" id="bUrl">Abrir</button>
+        </div>
+
+        <h4>Energía</h4>
+        <div class="grid g2">
+          <button class="b" data-act="lock" data-conf="no">🔒 Bloquear</button>
+          <button class="b" data-act="monitor_off" data-conf="no">🌙 Apagar pantalla</button>
+          <button class="b" data-act="sleep" data-conf="Suspender la laptop. Para volver a usarla tendrás que despertarla físicamente.">😴 Suspender</button>
+          <button class="b" data-act="restart" data-conf="Reiniciar la laptop. Se desconectará el control hasta que vuelva a encender.">🔄 Reiniciar</button>
+          <button class="b peligro" data-act="shutdown" data-conf="Apagar la laptop. No podrás volver a encenderla desde el celular.">⏻ Apagar</button>
+        </div>
+
+        <h4>Ajustes</h4>
+        <label class="ajuste">Sensibilidad del touchpad <span id="vSens" class="muted"></span>
+          <input type="range" id="rSens" min="0.5" max="3" step="0.1">
+        </label>
+        <div class="ajuste">Calidad de imagen
+          <div class="seg" id="calidad">
+            <button data-cal="ahorro">Ahorro</button>
+            <button data-cal="normal">Normal</button>
+            <button data-cal="nitido">Nítido</button>
+          </div>
+        </div>
+        <div class="fila">
+          <button class="b" id="bSalir">Olvidar esta laptop</button>
+        </div>
+        <p class="muted peq" id="infoSis"></p>
+      </div>
+    </section>
+
+    <!-- ───── ARCHIVOS ───── -->
+    <section id="tab-archivos" class="tab">
+      <div class="col fill">
+        <div class="fila scrollx" id="rapidos"></div>
+        <div class="fila">
+          <button class="b" id="bSubir">⬆︎ Subir</button>
+          <input type="file" id="fileIn" multiple hidden>
+          <button class="b tog" id="bOcultos">Ocultos</button>
+          <span class="grow"></span>
+          <button class="b" id="bRefrescar">↻</button>
+        </div>
+        <div id="ruta" class="muted peq"></div>
+        <div id="lista" class="lista"></div>
+      </div>
+    </section>
+  </main>
+
+  <nav id="tabs">
+    <button data-tab="pantalla" class="on"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>Pantalla</button>
+    <button data-tab="teclado"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>Teclado</button>
+    <button data-tab="control"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>Control</button>
+    <button data-tab="archivos"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Archivos</button>
+  </nav>
+</div>
+
+<!-- teclado en vivo: textarea invisible que abre el teclado del sistema -->
+<textarea id="live" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Teclado en vivo"></textarea>
+<div id="acc" hidden></div>
+
+<!-- conexión -->
+<div id="login" class="overlay" hidden>
+  <div class="card">
+    <h2>Conectar con tu laptop</h2>
+    <p class="muted">En la laptop abre <b>http://localhost:8765/pair</b> y escanea el QR con la cámara del iPhone. O pega aquí el enlace o el código que aparece ahí.</p>
+    <input id="inToken" placeholder="Enlace o código" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <button class="b acento grande" id="bConectar">Conectar</button>
+    <p class="muted peq" id="loginErr"></p>
+  </div>
+</div>
+
+<div id="modal" class="overlay" hidden>
+  <div class="card">
+    <h3 id="mTitulo"></h3>
+    <p class="muted" id="mTexto"></p>
+    <div id="mBotones" class="col"></div>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+<div id="aviso" hidden>
+  Para usarla como app: toca <b>Compartir</b> y luego <b>Agregar a inicio</b>.
+  <button class="b" id="bAviso">Entendido</button>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
