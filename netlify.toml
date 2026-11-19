@@ -1,0 +1,11 @@
+# Netlify solo publica la página de instalación (carpeta "landing").
+# La app en sí corre en tu laptop (mando.py), no en Netlify.
+[build]
+  publish = "landing"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    X-Frame-Options = "DENY"
