@@ -9,6 +9,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);
   -webkit-text-size-adjust:100%;touch-action:manipulation}
 body{position:fixed;inset:0;overflow:hidden}
 #app{display:flex;flex-direction:column;height:var(--vh,100dvh);padding-top:env(safe-area-inset-top)}
+.logo{border-radius:6px;display:block}
 #top{height:42px;flex:none;display:flex;align-items:center;gap:8px;padding:0 14px;font-size:15px}
 .grow{flex:1}.muted{color:var(--mut)}.peq{font-size:13px}
 .dot{width:10px;height:10px;border-radius:50%;background:var(--ac);box-shadow:0 0 8px var(--ac)}

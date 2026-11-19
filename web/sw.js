@@ -1,5 +1,5 @@
 // Service worker mínimo: la app abre aunque tarde la red (solo cachea la interfaz, nunca la API).
-const C = 'mando-v2';
+const C = 'mando-v3';
 const BASE = ['/', '/app.js', '/style.css', '/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(C).then(c => c.addAll(BASE)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== C).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
