@@ -104,3 +104,8 @@ input[type=range]{width:100%;accent-color:var(--ac)}
   #tabs svg{width:18px;height:18px}
   #bar{padding:4px 8px}#bar .b,#bar .seg button{min-height:38px}
 }
+
+#lock{position:absolute;left:10px;right:10px;top:10px;z-index:5;background:#3a2a05;border:1px solid var(--warn);color:#ffe2a3;border-radius:12px;padding:10px 12px;font-size:14px;line-height:1.4;pointer-events:none}
+#lock[hidden]{display:none}
+#boxDisp{display:flex;flex-direction:column;gap:4px}
+#vinc.ok{color:var(--ac)}

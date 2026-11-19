@@ -124,7 +124,9 @@ def cargar_config() -> dict:
         "nombre": "",
         "mantener_despierta": True,
         "monitor": 1,
+        "acceso_total": True,  # ver/bajar/subir en todo el disco (con token). Pon false para limitar a "carpetas".
         "carpetas": [str(Path.home())],
+        "dispositivos": {},
         "carpeta_subidas": str(Path.home() / "MandoPC"),
         "limite_subida_mb": 4096,
         "atajos": atajos_por_defecto(),
@@ -186,30 +188,52 @@ def direcciones_locales() -> list[tuple[str, str]]:
             s.close()
         except Exception:
             pass
-    out.sort(key=lambda t: (t[0].startswith("Tailscale"), t[1]))
+    out.sort(key=lambda t: (not t[0].startswith("Tailscale"), t[1]))
     return out
 
 
 class Guardia:
-    """Verifica el token y bloquea IPs que fallan muchas veces."""
+    """Reconoce el token de cada celular y bloquea IPs que fallan muchas veces."""
 
     MAX_FALLOS = 10
     BLOQUEO_S = 600
 
-    def __init__(self, token: str):
-        self.token = token
+    def __init__(self, cfg: dict):
+        self.cfg = cfg
         self.fallos: dict[str, list[float]] = {}
 
-    def verificar(self, ip: str, candidato: str) -> bool:
+    def _reg(self, ip: str) -> list[float]:
         ahora = time.time()
         reg = [t for t in self.fallos.get(ip, []) if ahora - t < self.BLOQUEO_S]
         self.fallos[ip] = reg
-        if len(reg) >= self.MAX_FALLOS:
-            return False
-        ok = bool(candidato) and hmac.compare_digest(candidato.encode(), self.token.encode())
-        if not ok:
-            reg.append(ahora)
-        return ok
+        return reg
+
+    def bloqueada(self, ip: str) -> bool:
+        return len(self._reg(ip)) >= self.MAX_FALLOS
+
+    def fallo(self, ip: str) -> None:
+        self._reg(ip).append(time.time())
+
+    def identificar(self, candidato: str) -> str | None:
+        """Devuelve el id del dispositivo dueño del token ('principal' = el código original) o None."""
+        if not candidato:
+            return None
+        c = candidato.encode()
+        hallado = None
+        for did, d in self.cfg.get("dispositivos", {}).items():
+            if hmac.compare_digest(c, str(d.get("token", "")).encode()):
+                hallado = did
+        if hmac.compare_digest(c, self.cfg["token"].encode()):
+            hallado = hallado or "principal"
+        return hallado
+
+    def verificar(self, ip: str, candidato: str) -> str | None:
+        if self.bloqueada(ip):
+            return None
+        r = self.identificar(candidato)
+        if r is None:
+            self.fallo(ip)
+        return r
 
 
 # ───────────────────────────── Pantalla ─────────────────────────────
@@ -551,8 +575,73 @@ def revisar_permisos_mac() -> list[str]:
     return avisos
 
 
+def pantalla_bloqueada() -> bool | None:
+    """True si la sesión está bloqueada (o Windows muestra un aviso de seguridad). None = no se pudo saber."""
+    try:
+        if SISTEMA == "Windows":
+            import ctypes
+
+            u = ctypes.windll.user32
+            u.OpenInputDesktop.restype = ctypes.c_void_p
+            u.CloseDesktop.argtypes = [ctypes.c_void_p]
+            h = u.OpenInputDesktop(0, False, 0x0100)  # DESKTOP_SWITCHDESKTOP
+            if not h:
+                return True
+            u.CloseDesktop(h)
+            return False
+        if SISTEMA == "Darwin":
+            import ctypes
+            import ctypes.util
+
+            def lib(n):
+                return ctypes.CDLL(ctypes.util.find_library(n) or f"/System/Library/Frameworks/{n}.framework/{n}")
+
+            cg, cf = lib("CoreGraphics"), lib("CoreFoundation")
+            cg.CGSessionCopyCurrentDictionary.restype = ctypes.c_void_p
+            cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+            cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+            cf.CFDictionaryGetValue.restype = ctypes.c_void_p
+            cf.CFDictionaryGetValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            cf.CFBooleanGetValue.restype = ctypes.c_ubyte
+            cf.CFBooleanGetValue.argtypes = [ctypes.c_void_p]
+            cf.CFRelease.argtypes = [ctypes.c_void_p]
+            d = cg.CGSessionCopyCurrentDictionary()
+            if not d:
+                return None
+            k = cf.CFStringCreateWithCString(None, b"CGSSessionScreenIsLocked", 0x08000100)
+            v = cf.CFDictionaryGetValue(d, k)
+            bloq = bool(v) and bool(cf.CFBooleanGetValue(v))
+            cf.CFRelease(k)
+            cf.CFRelease(d)
+            return bloq
+    except Exception:
+        return None
+    return None
+
+
+def raices_de_archivos(cfg: dict) -> list[Path]:
+    """Carpetas raíz a las que se puede entrar. Con acceso_total: todo el disco (todas las unidades en Windows)."""
+    home = Path.home().resolve()
+    if cfg.get("acceso_total", True):
+        raices = [home]
+        try:
+            if SISTEMA == "Windows":
+                import psutil
+
+                for part in psutil.disk_partitions(all=False):
+                    if part.mountpoint and Path(part.mountpoint).exists():
+                        raices.append(Path(part.mountpoint))
+            else:
+                raices.append(Path("/"))
+        except Exception:
+            raices.append(Path(home.anchor))
+        return raices
+    raices = [Path(p).expanduser().resolve() for p in cfg["carpetas"] if Path(p).expanduser().exists()]
+    return raices or [home]
+
+
 def estado(nombre: str | None = None) -> dict:
-    d = {"host": nombre or socket.gethostname()}
+    d = {"host": nombre or socket.gethostname(), "bloqueada": bool(pantalla_bloqueada())}
     try:
         import psutil
 
@@ -580,12 +669,12 @@ class Cliente:
 
 
 def crear_app(cfg: dict) -> web.Application:
-    guardia = Guardia(cfg["token"])
+    guardia = Guardia(cfg)
     pantalla = Pantalla()
     entrada = Entrada()
-    raices = [Path(p).expanduser().resolve() for p in cfg["carpetas"] if Path(p).expanduser().exists()]
-    if not raices:
-        raices = [Path.home().resolve()]
+    raices = raices_de_archivos(cfg)
+    codigos: dict[str, float] = {}  # códigos de emparejamiento de un solo uso (15 min)
+    conexiones: list[tuple[str, web.WebSocketResponse]] = []
     tickets: dict[str, tuple[Path, float]] = {}
     atajos: list[dict] = cfg.get("atajos", [])
     nombre = nombre_equipo(cfg)
@@ -638,7 +727,7 @@ def crear_app(cfg: dict) -> web.Application:
     async def manifiesto(request):
         t = request.query.get("t", "")
         inicio = "/"
-        if t and hmac.compare_digest(t.encode(), cfg["token"].encode()):
+        if t and guardia.identificar(t):
             inicio = "/#t=" + quote(t)
         data = {
             "id": "/", "name": f"Mando · {nombre}", "short_name": f"Mando · {nombre}"[:12], "lang": "es",
@@ -652,45 +741,176 @@ def crear_app(cfg: dict) -> web.Application:
         }
         return web.json_response(data, content_type="application/manifest+json")
 
-    async def parear(request: web.Request):
+    def solo_local(request: web.Request):
+        """None si la petición viene de esta misma laptop; si no, la respuesta de rechazo."""
         h = request.headers
         host = h.get("Host", "")
-        nombre = host if host.endswith("]") else host.rsplit(":", 1)[0]
+        nom = host if host.endswith("]") else host.rsplit(":", 1)[0]
         proxied = any(x in h for x in ("X-Forwarded-For", "Forwarded", "CF-Connecting-IP", "X-Real-IP", "Tailscale-User-Login"))
-        if request.remote not in ("127.0.0.1", "::1") or proxied or nombre not in ("localhost", "127.0.0.1", "[::1]"):
+        if request.remote not in ("127.0.0.1", "::1") or proxied or nom not in ("localhost", "127.0.0.1", "[::1]"):
             return web.Response(status=403, text="Esta página solo se abre desde la propia laptop.")
+        origen = h.get("Origin")
+        if origen and urlsplit(origen).netloc != host:
+            return web.Response(status=403, text="Origen no permitido")
+        return None
+
+    def codigo_nuevo() -> str:
+        ahora = time.time()
+        for k in [k for k, exp in codigos.items() if exp < ahora]:
+            codigos.pop(k, None)
+        c = secrets.token_urlsafe(9)
+        codigos[c] = ahora + 900
+        return c
+
+    def hace(ts) -> str:
+        if not ts:
+            return "aún sin conectar"
+        d = int(time.time() - ts)
+        if d < 90:
+            return "conectado hace un momento"
+        if d < 3600:
+            return f"hace {d // 60} min"
+        if d < 172800:
+            return f"hace {d // 3600} h"
+        return f"hace {d // 86400} días"
+
+    def marcar(did: str) -> None:
+        if did == "principal":
+            cfg["principal_ultimo"] = int(time.time())
+        elif did in cfg["dispositivos"]:
+            cfg["dispositivos"][did]["ultimo"] = int(time.time())
+        guardar_config(cfg)
+
+    def nombre_dispositivo(did: str) -> str:
+        if did == "principal":
+            return "Celular (código original)"
+        return cfg["dispositivos"].get(did, {}).get("nombre", "Celular")
+
+    async def vincular(request: web.Request):
+        """El celular cambia un código de un solo uso por su propio token (no caduca)."""
+        ip = request.remote or ""
+        if guardia.bloqueada(ip):
+            return web.json_response({"error": "demasiados intentos"}, status=429)
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "petición inválida"}, status=400)
+        cod = str(body.get("codigo", "")).strip().encode()
+        ahora = time.time()
+        valido = None
+        for k, exp in list(codigos.items()):
+            if hmac.compare_digest(cod, k.encode()) and exp >= ahora:
+                valido = k
+        if not valido:
+            guardia.fallo(ip)
+            return web.json_response({"error": "código inválido o vencido"}, status=401)
+        del codigos[valido]
+        base = "".join(c for c in str(body.get("nombre") or "") if c.isprintable() and c not in "<>&\"'")[:30].strip() or "Celular"
+        usados = {d.get("nombre") for d in cfg["dispositivos"].values()}
+        nom, n = base, 2
+        while nom in usados:
+            nom, n = f"{base} {n}", n + 1
+        did, tok = secrets.token_hex(4), secrets.token_urlsafe(24)
+        cfg["dispositivos"][did] = {"nombre": nom, "token": tok, "creado": int(ahora), "ultimo": 0}
+        cfg["emparejado"] = True
+        guardar_config(cfg)
+        return web.json_response({"token": tok, "nombre": nom, "host": nombre})
+
+    async def pair_estado(request: web.Request):
+        r = solo_local(request)
+        if r:
+            return r
+        c = request.query.get("c", "")
+        return web.json_response({"vigente": codigos.get(c, 0) >= time.time(), "n": len(cfg["dispositivos"])})
+
+    async def pair_revocar(request: web.Request):
+        r = solo_local(request)
+        if r:
+            return r
+        did = str((await request.json()).get("id", ""))
+        if did == "principal":
+            cfg["token"] = secrets.token_urlsafe(24)
+            cfg.pop("principal_ultimo", None)
+        elif did in cfg["dispositivos"]:
+            del cfg["dispositivos"][did]
+        else:
+            return web.json_response({"error": "no existe"}, status=404)
+        guardar_config(cfg)
+        for d, w in list(conexiones):
+            if d == did:
+                await w.close()
+        return web.json_response({"ok": True})
+
+    async def parear(request: web.Request):
+        r = solo_local(request)
+        if r:
+            return r
+        import html as _h
         import qrcode
         import qrcode.image.svg
 
         puerto = cfg["puerto"]
+        cod = codigo_nuevo()
+        direcciones = direcciones_locales()
+        hay_ts = any(e.startswith("Tailscale") for e, _ in direcciones)
         bloques = []
-        for etiqueta, ip in direcciones_locales():
-            url = f"http://{ip}:{puerto}/#t={quote(cfg['token'])}"
+        for etiqueta, ip in direcciones:
+            url = f"http://{ip}:{puerto}/#c={quote(cod)}"
             qr = qrcode.QRCode(border=2, box_size=8)
             qr.add_data(url)
             qr.make(fit=True)
             svg = qr.make_image(image_factory=qrcode.image.svg.SvgPathImage).to_string().decode()
             svg = svg[svg.index("<svg"):]
+            ts = etiqueta.startswith("Tailscale")
+            nota = ("<b class=rec>Recomendado: funciona en casa y fuera de casa</b>" if ts
+                    else ("<span class=m>Solo funciona dentro de esta red Wi-Fi</span>" if hay_ts else ""))
             bloques.append(
-                f'<div class="c"><h3>{etiqueta}</h3><div class="qr">{svg}</div>'
+                f'<div class="c{" ts" if ts else ""}"><h3>{_h.escape(etiqueta)}</h3>{nota}<div class="qr">{svg}</div>'
                 f'<code>{ip}:{puerto}</code></div>'
             )
         if not bloques:
             bloques.append("<p>No encontré ninguna red. Conecta la laptop al Wi-Fi.</p>")
+        filas = []
+        lista = [(d, v["nombre"], v.get("ultimo", 0)) for d, v in cfg["dispositivos"].items()]
+        if cfg.get("principal_ultimo"):
+            lista.append(("principal", "Celular (código original)", cfg["principal_ultimo"]))
+        for d, n, u in lista:
+            filas.append(
+                f'<div class=d><span>📱 <b>{_h.escape(n)}</b> <i>{hace(u)}</i></span>'
+                f'<button onclick="quitar(\'{d}\',this)">Desvincular</button></div>'
+            )
+        lista_html = "".join(filas) or "<p class=m>Todavía no hay celulares vinculados.</p>"
+        ayuda_ts = "" if hay_ts else """
+<div class=box><h3>¿Quieres entrar desde fuera de casa?</h3>
+<ol><li>Instala <b>Tailscale</b> (gratis) en esta laptop y en tu iPhone: <a href="https://tailscale.com/download" target=_blank>tailscale.com/download</a>. Entra con la misma cuenta en los dos.</li>
+<li>Recarga esta página: aparecerá un QR de <b>Tailscale</b>.</li>
+<li>Escanea ese QR (y no el de Wi-Fi) y agrégala a inicio. Así la misma app funciona en casa y en la calle.</li></ol></div>"""
         html = f"""<!doctype html><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>Emparejar celular — Mando PC</title>
-<style>body{{font:16px system-ui;background:#0b0f14;color:#e6edf5;margin:0;padding:24px;max-width:900px;margin:auto}}
-h1{{margin:0 0 4px}}p{{color:#8b9bb0}}.g{{display:flex;flex-wrap:wrap;gap:16px}}
-.c{{background:#121821;border:1px solid #243040;border-radius:14px;padding:16px;width:290px}}
-.c h3{{margin:0 0 10px;font-size:15px}}.qr{{background:#fff;border-radius:8px;padding:6px;line-height:0}}.qr svg{{width:100%;height:auto}}
-code{{display:block;margin-top:10px;color:#3ddc97}}.t{{margin-top:24px;word-break:break-all}}
-ol{{color:#c5d1e0;line-height:1.7}}</style>
-<h1>Mando PC</h1><p>Empareja tu celular (solo se ve desde esta laptop).</p>
-<ol><li>Abre la <b>cámara del iPhone</b> y apunta al código QR de tu red.</li>
-<li>Toca el aviso para abrir el enlace en Safari.</li>
-<li>Toca <b>Compartir → Agregar a inicio</b> para instalarla como app.</li></ol>
-<div class=g>{''.join(bloques)}</div>
-<div class=t><p>Si no puedes escanear, en la app pega este código:</p><code>{cfg['token']}</code></div>"""
+<title>Vincular celular — Mando PC</title>
+<style>body{{font:16px system-ui;background:#0b0f14;color:#e6edf5;margin:0;padding:24px;max-width:960px;margin:auto}}
+h1{{margin:0 0 4px}}h2{{margin:28px 0 10px;font-size:18px}}p,.m{{color:#8b9bb0}}.g{{display:flex;flex-wrap:wrap;gap:16px}}
+.c{{background:#121821;border:1px solid #243040;border-radius:14px;padding:16px;width:290px}}.c.ts{{border-color:#3ddc97}}
+.c h3{{margin:0 0 6px;font-size:15px}}.rec{{display:block;color:#3ddc97;font-size:13px;margin-bottom:8px}}.c .m{{display:block;font-size:13px;margin-bottom:8px}}
+.qr{{background:#fff;border-radius:8px;padding:6px;line-height:0}}.qr svg{{width:100%;height:auto}}
+code{{display:block;margin-top:10px;color:#3ddc97}}ol{{color:#c5d1e0;line-height:1.7}}
+.d{{display:flex;justify-content:space-between;align-items:center;gap:10px;background:#121821;border:1px solid #243040;border-radius:12px;padding:10px 14px;margin-bottom:8px}}
+.d i{{color:#8b9bb0;font-size:13px;font-style:normal;margin-left:6px}}
+button{{background:#243040;color:#e6edf5;border:0;border-radius:8px;padding:8px 12px;font:inherit;cursor:pointer}}
+.box{{background:#121821;border:1px solid #243040;border-radius:14px;padding:6px 18px 10px;margin-top:22px}}a{{color:#3ddc97}}</style>
+<h1>Mando PC</h1><p>Vincula tus celulares. Cada uno queda guardado con su propia llave y entra las veces que quiera, sin volver a escanear.</p>
+<h2>Celulares vinculados</h2>{lista_html}
+<h2>Vincular otro celular</h2>
+<ol><li>Abre la <b>cámara</b> del celular y apunta al QR{' de Tailscale' if hay_ts else ''}.</li>
+<li>Toca el aviso para abrirlo en <b>Safari</b> (iPhone) o Chrome (Android).</li>
+<li><b>Importante:</b> toca <b>Compartir → Agregar a pantalla de inicio</b>. Sin esto el navegador puede olvidar la vinculación.</li></ol>
+<div class=g>{''.join(bloques)}</div>{ayuda_ts}
+<p class=m style="margin-top:24px">El QR sirve una sola vez y vence en 15 minutos; esta página se renueva sola.</p>
+<script>
+const c={json.dumps(cod)};
+async function quitar(id,b){{if(!confirm('¿Desvincular este celular? Perderá el acceso.'))return;b.disabled=true;
+await fetch('/pair/revocar',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{id}})}});location.reload();}}
+setInterval(async()=>{{try{{const r=await(await fetch('/pair/estado?c='+encodeURIComponent(c))).json();if(!r.vigente)location.reload();}}catch(e){{}}}},2500);
+</script>"""
         return web.Response(text=html, content_type="text/html")
 
     # ---- API de archivos
@@ -714,7 +934,7 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
         except PermissionError:
             raise web.HTTPForbidden(text="Sin permiso para leer esta carpeta")
         items.sort(key=lambda x: (not x["d"], x["n"].lower()))
-        padre = str(p.parent) if p != raices[0] and permitido(p.parent) else None
+        padre = str(p.parent) if p.parent != p and permitido(p.parent) else None
         home = raices[0]
         rapidos = []
         for etiqueta, sub in (("Inicio", ""), ("Escritorio", "Desktop"), ("Documentos", "Documents"), ("Descargas", "Downloads")):
@@ -794,7 +1014,7 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
         return web.json_response({"ok": True, "archivos": guardados, "carpeta": str(destino)})
 
     # ---- WebSocket
-    async def info_hello(cl: Cliente):
+    async def info_hello(cl: Cliente, did: str = ""):
         mons = await pantalla.info()
         sel = next((m for m in mons if m["i"] == cl.monitor), mons[0] if mons else {"i": 1, "w": 1920, "h": 1080})
         cl.monitor = sel["i"]
@@ -803,6 +1023,7 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
             "monitores": len(mons), "monitor": sel["i"], "pantalla": {"w": sel["w"], "h": sel["h"]},
             "atajos": [{"n": a.get("nombre", "?"), "i": a.get("icono", "⚡")} for a in atajos],
             "avisos": avisos,
+            "dispositivo": nombre_dispositivo(did) if did else "",
             **estado(nombre),
         }
 
@@ -819,7 +1040,8 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
                 try:
                     datos, ult, _ = await pantalla.frame(cl.ancho, cl.calidad, cl.monitor, ult)
                 except Exception as e:
-                    await ws.send_json({"t": "err", "m": f"No pude capturar la pantalla: {e}"})
+                    if not pantalla_bloqueada():
+                        await ws.send_json({"t": "err", "m": f"No pude capturar la pantalla: {e}"})
                     await asyncio.sleep(2)
                     continue
                 if datos is not None:
@@ -838,7 +1060,7 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
     async def bucle_estado(ws: web.WebSocketResponse):
         try:
             while not ws.closed:
-                await asyncio.sleep(15)
+                await asyncio.sleep(5)
                 await ws.send_json({"t": "estado", **estado(nombre)})
         except (asyncio.CancelledError, ConnectionResetError):
             pass
@@ -931,15 +1153,17 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
         except Exception:
             await ws.close()
             return ws
-        if datos.get("op") != "auth" or not guardia.verificar(ip, str(datos.get("token", ""))):
+        did = guardia.verificar(ip, str(datos.get("token", ""))) if datos.get("op") == "auth" else None
+        if not did:
             await ws.send_json({"t": "denegado"})
             await ws.close()
             return ws
         if not cfg.get("emparejado"):
             cfg["emparejado"] = True
-            guardar_config(cfg)
+        marcar(did)
+        conexiones.append((did, ws))
         cl = Cliente(cfg)
-        await ws.send_json(await info_hello(cl))
+        await ws.send_json(await info_hello(cl, did))
         t1 = asyncio.create_task(bucle_pantalla(ws, cl))
         t2 = asyncio.create_task(bucle_estado(ws))
         try:
@@ -954,12 +1178,23 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
             t1.cancel()
             t2.cancel()
             cl.despertar.set()
+            try:
+                conexiones.remove((did, ws))
+            except ValueError:
+                pass
+            try:
+                marcar(did)
+            except Exception:
+                pass
         return ws
 
     app = web.Application(middlewares=[seguridad])
     app.router.add_get("/", indice)
     app.router.add_get("/manifest.webmanifest", manifiesto)
     app.router.add_get("/pair", parear)
+    app.router.add_get("/pair/estado", pair_estado)
+    app.router.add_post("/pair/revocar", pair_revocar)
+    app.router.add_post("/vincular", vincular)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/api/ls", api_ls)
     app.router.add_post("/api/ticket", api_ticket)
@@ -982,9 +1217,11 @@ def main():
     cfg = cargar_config()
     if args.nuevo_token:
         cfg["token"] = secrets.token_urlsafe(24)
+        cfg["dispositivos"] = {}
+        cfg.pop("principal_ultimo", None)
         cfg["emparejado"] = False
         guardar_config(cfg)
-        print("🔑 Token nuevo creado. Los celulares anteriores ya no pueden entrar; vuelve a emparejarlos.")
+        print("🔑 Todas las vinculaciones fueron revocadas. Vuelve a vincular tus celulares.")
     if args.puerto:
         cfg["puerto"] = args.puerto
     puerto = int(cfg["puerto"])
@@ -996,7 +1233,8 @@ def main():
     print("  ───────────────────────────────────────────")
     for etiqueta, ip in direcciones_locales():
         print(f"  {etiqueta}:  http://{ip}:{puerto}")
-    print(f"\n  Emparejar celular:  http://localhost:{puerto}/pair   (solo se abre en esta laptop)")
+    print(f"\n  Vincular celular:  http://localhost:{puerto}/pair   (solo se abre en esta laptop)")
+    print("  Archivos: " + ("todo el disco" if cfg.get("acceso_total", True) else "solo las carpetas permitidas"))
     print("  Para detener: Ctrl+C\n")
 
     async def al_iniciar(_app):

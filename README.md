@@ -25,17 +25,30 @@ Descarga o clona este repo en la laptop y sigue los pasos de tu sistema.
    - **Accesibilidad** (para mover el mouse y escribir)
 4. Para que arranque solo al iniciar sesión: `./autoinicio-mac.command` (se quita con `./autoinicio-mac.command --quitar`).
 
-### Emparejar el celular
-Al arrancar se abre una página con un **código QR** (siempre disponible en http://localhost:8765/pair, solo desde esa laptop). Escanéalo con la cámara del iPhone, ábrelo en Safari y toca **Compartir → Agregar a inicio**.
+### Vincular el celular (una vez por celular)
+Al arrancar se abre una página con un **código QR** (siempre en http://localhost:8765/pair, solo desde esa laptop; también con `agregar-celular.bat` / `agregar-celular.command`).
 
-La laptop debe estar **encendida**. Mientras Mando PC corre evita que se suspenda por inactividad (se puede desactivar con `"mantener_despierta": false`); si cierras la tapa, se suspende igual.
+1. Escanéalo con la cámara y ábrelo en Safari (iPhone) o Chrome (Android).
+2. **Toca Compartir → Agregar a pantalla de inicio.** La app te lo recuerda mientras no lo hagas: sin esto, Safari borra la vinculación tras ~7 días sin uso.
 
-## Usarla fuera de casa (recomendado: Tailscale, gratis)
+Cada celular recibe **su propia llave**, no caduca y entra las veces que quiera sin volver a escanear. En `/pair` ves la lista de celulares vinculados y puedes **desvincular** uno sin afectar a los demás. El QR sirve una sola vez y vence en 15 minutos.
 
-1. Instala **Tailscale** en la laptop y en el iPhone, e inicia sesión con la misma cuenta.
-2. En `/pair` aparece un segundo QR "Tailscale". Escanéalo y agrégalo a inicio.
+## Que la laptop siga disponible
 
-Funciona desde cualquier red sin abrir puertos en tu router. **No abras el puerto 8765 al internet.**
+| Situación | ¿Funciona? |
+|---|---|
+| Pantalla apagada por inactividad | Sí |
+| Laptop **bloqueada** (Win+L o por tiempo) | El programa sigue corriendo, pero **no se puede ver ni teclear la contraseña** en la pantalla de bloqueo (lo impide el sistema). La app muestra un aviso 🔒. |
+| Suspendida, hibernada, apagada o tapa cerrada | No: no hay forma de despertarla desde la app |
+
+Para trabajar a distancia sin sorpresas, ejecuta **una vez** `modo-remoto-windows.bat` (o `modo-remoto-mac.command`): con la laptop conectada a la corriente no se suspende, cerrar la tapa no la duerme y no pide contraseña al despertar. Se deshace con el argumento `quitar`. Para que Mando PC arranque solo al iniciar sesión: `autoinicio-windows.bat` / `autoinicio-mac.command`.
+
+## Usarla fuera de casa (Tailscale, gratis)
+
+1. Instala **Tailscale** en la laptop y en el iPhone e inicia sesión con la misma cuenta (`modo-remoto-windows.bat` puede instalarlo por ti). Deja la VPN de Tailscale activada en el iPhone.
+2. Recarga `/pair`: aparece un QR **Tailscale** (recomendado). Escanéalo y agrégalo a inicio.
+
+Usa **ese** QR también para el uso diario: la app queda atada a la dirección con la que la instalaste, y la de Tailscale funciona en casa y fuera. La del Wi-Fi solo sirve dentro de la red. No abras el puerto 8765 al internet.
 
 ## Cómo se usa
 
@@ -50,10 +63,10 @@ Los atajos y teclas se adaptan solos: en Mac usan ⌘ en lugar de Ctrl y los ata
 
 ## Seguridad
 
-- Cada celular entra con un **token secreto** (192 bits) que solo aparece en `/pair`, que **solo abre desde la propia laptop**.
+- Cada celular entra con **su propio token secreto** (192 bits) que se entrega con un QR de un solo uso desde `/pair`, que **solo abre desde la propia laptop**.
 - Solo acepta conexiones de redes privadas (Wi-Fi local y Tailscale). Bloquea IPs que fallan muchas veces.
-- Los archivos solo se ven dentro de las carpetas permitidas (por defecto tu carpeta de usuario).
-- ¿Perdiste el celular? Ejecuta `iniciar.bat --nuevo-token` (Windows) o `./iniciar.command --nuevo-token` (Mac): invalida todos los celulares.
+- Archivos: por defecto ves **todo el disco** (todas las unidades). Para limitarlo pon `"acceso_total": false` y lista las carpetas en `"carpetas"`.
+- ¿Perdiste un celular? Desvincúlalo en `/pair`. ¿Quieres borrarlos todos? `iniciar.bat --nuevo-token` (Windows) o `./iniciar.command --nuevo-token` (Mac).
 - Quien tenga la app emparejada controla la laptop; protege tu iPhone con Face ID/código.
 
 ## Configuración
@@ -70,7 +83,7 @@ Para cambiar el nombre de la laptop en la app: `"nombre": "Laptop oficina"`.
 
 ## Limitaciones conocidas
 
-- Windows: no se ve ni controla la pantalla de bloqueo ni las ventanas de administrador (UAC) salvo que ejecutes Mando PC como administrador.
+- Windows/Mac: no se ve ni controla la pantalla de bloqueo ni (en Windows) los avisos de permisos (UAC) salvo que ejecutes Mando PC como administrador.
 - Linux con Wayland no funciona; usa una sesión X11 (y `xclip` para el portapapeles).
-- Si la laptop se apaga o se suspende, no hay forma de despertarla desde la app.
+- Si la laptop se apaga o se suspende, no hay forma de despertarla desde la app (usa el modo remoto para evitarlo). Tras reiniciar, Windows/Mac esperan que inicies sesión antes de que Mando PC arranque.
 - Probado a fondo en Linux (X11). Los caminos de Windows y Mac usan las mismas librerías, pero conviene confirmarlos en tu equipo: si algo falla, el mensaje aparece en la app y en `~/.mando-pc/mando.log`.

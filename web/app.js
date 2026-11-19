@@ -24,14 +24,52 @@ const S = {
 let token = null;
 
 function leerToken() {
-  const m = location.hash.match(/t=([^&]+)/);
+  const m = location.hash.match(/[#&]t=([^&]+)/);
   if (m) { const t = decodeURIComponent(m[1]); LS.set('token', t); return t; }
   return LS.get('token', null);
 }
-function extraerToken(txt) {
-  txt = (txt || '').trim();
-  const m = txt.match(/[#?&]t=([^&\s]+)/);
-  return m ? decodeURIComponent(m[1]) : txt;
+function nombreDispositivo() {
+  const u = navigator.userAgent;
+  if (/iPhone/i.test(u)) return 'iPhone';
+  if (/iPad/i.test(u)) return 'iPad';
+  if (/Android/i.test(u)) return 'Android';
+  if (/Windows/i.test(u)) return 'PC Windows';
+  if (/Mac/i.test(u)) return 'Mac';
+  return 'Celular';
+}
+const instalada = () => !!(navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
+function fijarManifest() {
+  // el manifest lleva el token: así la app de la pantalla de inicio nace ya vinculada
+  if (token) $('#lnkManifest').href = '/manifest.webmanifest?t=' + encodeURIComponent(token);
+}
+/* cambia un código de un solo uso (QR) por la llave propia de este celular */
+async function vincular(codigo) {
+  try {
+    const r = await fetch('/vincular', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codigo, nombre: nombreDispositivo() }) });
+    if (!r.ok) return false;
+    const d = await r.json();
+    token = d.token; LS.set('token', d.token); LS.set('nombreDisp', d.nombre);
+    history.replaceState(null, '', location.pathname);
+    fijarManifest();
+    return true;
+  } catch { return false; }
+}
+function pintarVinculo() {
+  const nom = (S.info && S.info.dispositivo) || LS.get('nombreDisp', 'Este celular');
+  $('#nomDisp').textContent = '📱 ' + nom;
+  $('#vinc').textContent = token ? '· vinculado ✓' : ''; $('#vinc').className = 'muted' + (token ? ' ok' : '');
+  $('#estInst').textContent = instalada()
+    ? 'Instalada como app ✓ Entra siempre que quieras, sin volver a escanear.'
+    : '⚠ Falta agregarla a la pantalla de inicio. Sin eso el navegador puede borrar la vinculación (Safari lo hace tras unos 7 días sin uso).';
+}
+function recordatorio() {
+  if (!token || instalada() || S.avisoOculto) return;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  $('#avisoTxt').innerHTML = ios
+    ? '✅ Celular vinculado. Para que no se pierda: toca <b>Compartir</b> (□↑) y luego <b>Agregar a pantalla de inicio</b>.'
+    : '✅ Celular vinculado. Para que no se pierda: menú <b>⋮</b> → <b>Agregar a pantalla de inicio</b> (o Instalar app).';
+  $('#aviso').hidden = false;
 }
 
 /* ───────────── utilidades UI ───────────── */
@@ -81,7 +119,7 @@ function conectar() {
     if (typeof ev.data !== 'string') return dibujar(ev.data);
     const m = JSON.parse(ev.data);
     if (m.t === 'hello') alConectar(m);
-    else if (m.t === 'denegado') { S.cerrando = true; LS.del('token'); token = null; mostrarLogin('Ese código no es válido. Empareja de nuevo.'); }
+    else if (m.t === 'denegado') { S.cerrando = true; LS.del('token'); token = null; mostrarLogin('Esta vinculación ya no es válida (se quitó desde la laptop o es un código vencido). Vincula el celular de nuevo.'); }
     else if (m.t === 'pong') { const ms = Math.round(performance.now() - m.ts); $('#ms').textContent = ms + ' ms'; setEstado(ms > 400 ? 'mid' : 'ok'); }
     else if (m.t === 'estado') pintarEstado(m);
     else if (m.t === 'clip') { $('#txtClip').value = m.s || '(vacío)'; }
@@ -102,7 +140,7 @@ function alConectar(m) {
   pintarEstado(m);
   $('#bMon').hidden = m.monitores < 2; $('#bMon').textContent = '🖥 ' + m.monitor;
   $('#infoSis').textContent = `Mando PC ${m.version} · ${({ win: 'Windows', mac: 'macOS', linux: 'Linux' })[m.os]}`;
-  armarAtajos(); armarTeclado();
+  armarAtajos(); armarTeclado(); pintarVinculo(); recordatorio();
   if (m.avisos && m.avisos.length) toast(m.avisos[0], 9000);
   clearInterval(pingT);
   pingT = setInterval(() => send({ op: 'ping', ts: performance.now() }), 4000);
@@ -114,6 +152,7 @@ function alConectar(m) {
 
 function pintarEstado(m) {
   if (m.host) $('#host').textContent = m.host;
+  $('#lock').hidden = !m.bloqueada;
   $('#bat').textContent = m.bateria != null ? `${m.cargando ? '⚡' : '🔋'} ${m.bateria}%` : '';
 }
 
@@ -121,10 +160,16 @@ function mostrarLogin(err) {
   $('#login').hidden = false; $('#loginErr').textContent = err || '';
   $('#inToken').value = '';
 }
-$('#bConectar').onclick = () => {
-  const t = extraerToken($('#inToken').value);
-  if (t.length < 10) return ($('#loginErr').textContent = 'Código demasiado corto.');
-  token = t; LS.set('token', t); S.cerrando = false; $('#login').hidden = true; conectar();
+$('#bConectar').onclick = async () => {
+  const txt = $('#inToken').value.trim();
+  if (txt.length < 8) return ($('#loginErr').textContent = 'Pega el enlace completo del QR.');
+  $('#loginErr').textContent = 'Vinculando…';
+  const mt = txt.match(/[#?&]t=([^&\s]+)/), mc = txt.match(/[#?&]c=([^&\s]+)/);
+  let ok = false;
+  if (mt) { token = decodeURIComponent(mt[1]); LS.set('token', token); ok = true; }
+  else ok = await vincular(mc ? decodeURIComponent(mc[1]) : txt);
+  if (!ok) return ($('#loginErr').textContent = 'Ese código no sirve o ya venció. En la laptop recarga la página de vincular y vuelve a intentar.');
+  fijarManifest(); S.cerrando = false; $('#login').hidden = true; conectar();
 };
 
 /* ───────────── pantalla ───────────── */
@@ -421,7 +466,7 @@ rSens.oninput = () => { S.sens = parseFloat(rSens.value); $('#vSens').textConten
 function pintarCal() { $$('#calidad button').forEach(b => b.classList.toggle('on', b.dataset.cal === S.cal)); }
 $$('#calidad button').forEach(b => (b.onclick = () => { S.cal = b.dataset.cal; LS.set('cal', S.cal); pintarCal(); actualizarStream(); }));
 $('#bSalir').onclick = async () => {
-  if (!(await confirmar('Olvidar esta laptop', 'Este celular dejará de tener acceso hasta que lo emparejes otra vez.', 'Olvidar'))) return;
+  if (!(await confirmar('Olvidar esta laptop', 'Este celular dejará de tener acceso hasta que lo vincules otra vez.', 'Olvidar'))) return;
   S.cerrando = true; LS.del('token'); token = null; history.replaceState(null, '', location.pathname);
   try { S.ws.close(); } catch {} mostrarLogin();
 };
@@ -509,15 +554,13 @@ $$('#tabs button').forEach(b => (b.onclick = () => {
 }));
 
 /* ───────────── arranque ───────────── */
-function iniciar() {
+async function iniciar() {
   token = leerToken();
-  pintarModo(); pintarCal();
-  if (token) { // el manifest lleva el token para que "Agregar a inicio" lo conserve
-    $('#lnkManifest').href = '/manifest.webmanifest?t=' + encodeURIComponent(token);
-  }
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  if (ios && !navigator.standalone && !LS.get('avisoVisto', false)) $('#aviso').hidden = false;
-  $('#bAviso').onclick = () => { $('#aviso').hidden = true; LS.set('avisoVisto', true); };
+  const mc = location.hash.match(/[#&]c=([^&]+)/);
+  if (mc) await vincular(decodeURIComponent(mc[1])); // llegó por el QR
+  pintarModo(); pintarCal(); fijarManifest();
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
+  $('#bAviso').onclick = () => { $('#aviso').hidden = true; S.avisoOculto = true; };
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
   }
