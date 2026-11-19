@@ -9,6 +9,8 @@ Funciona igual en **Windows y Mac** (y Linux con X11). Si usas las dos, instála
 
 Descarga o clona este repo en la laptop y sigue los pasos de tu sistema.
 
+> ⚠️ Si bajaste el **ZIP**, primero **extráelo** (clic derecho → *Extraer todo…*) y abre `iniciar` desde la carpeta nueva. Si lo abres dentro del ZIP falla con "requirements.txt not found".
+
 ### Windows
 1. Instala **Python 3** (https://www.python.org/downloads/) marcando *Add Python to PATH*.
 2. Doble clic en **`iniciar.bat`**. La primera vez instala lo necesario.
