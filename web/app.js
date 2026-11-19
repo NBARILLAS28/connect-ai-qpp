@@ -103,6 +103,7 @@ function alConectar(m) {
   $('#bMon').hidden = m.monitores < 2; $('#bMon').textContent = '🖥 ' + m.monitor;
   $('#infoSis').textContent = `Mando PC ${m.version} · ${({ win: 'Windows', mac: 'macOS', linux: 'Linux' })[m.os]}`;
   armarAtajos(); armarTeclado();
+  if (m.avisos && m.avisos.length) toast(m.avisos[0], 9000);
   clearInterval(pingT);
   pingT = setInterval(() => send({ op: 'ping', ts: performance.now() }), 4000);
   send({ op: 'ping', ts: performance.now() });

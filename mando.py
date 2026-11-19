@@ -121,6 +121,8 @@ def cargar_config() -> dict:
         "token": "",
         "emparejado": False,
         "solo_redes_privadas": True,
+        "nombre": "",
+        "mantener_despierta": True,
         "monitor": 1,
         "carpetas": [str(Path.home())],
         "carpeta_subidas": str(Path.home() / "MandoPC"),
@@ -496,8 +498,61 @@ def abrir_en_pc(ruta: str) -> None:
         _lanzar(["xdg-open", ruta])
 
 
-def estado() -> dict:
-    d = {"host": socket.gethostname()}
+def nombre_equipo(cfg: dict | None = None) -> str:
+    n = (cfg or {}).get("nombre") or socket.gethostname()
+    return n.split(".")[0]
+
+
+def mantener_despierta() -> None:
+    """Evita que el sistema se suspenda por inactividad mientras Mando PC corre
+    (la pantalla sí puede apagarse; cerrar la tapa de la laptop suspende igual)."""
+    try:
+        if SISTEMA == "Windows":
+            import ctypes
+
+            ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+            ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+        elif SISTEMA == "Darwin" and shutil.which("caffeinate"):
+            _lanzar(["caffeinate", "-i", "-w", str(os.getpid())])
+        elif SISTEMA == "Linux" and shutil.which("systemd-inhibit"):
+            _lanzar(["systemd-inhibit", "--what=idle:sleep", "--who=Mando PC", "--why=Control remoto",
+                     "tail", f"--pid={os.getpid()}", "-f", os.devnull])
+    except Exception as e:
+        print(f"⚠ No pude evitar la suspensión automática: {e}")
+
+
+def revisar_permisos_mac() -> list[str]:
+    """En macOS sin estos permisos la pantalla sale vacía y el mouse/teclado no responden."""
+    if SISTEMA != "Darwin":
+        return []
+    avisos: list[str] = []
+    try:
+        import ctypes
+        import ctypes.util
+
+        def lib(nombre):
+            ruta = ctypes.util.find_library(nombre) or f"/System/Library/Frameworks/{nombre}.framework/{nombre}"
+            return ctypes.CDLL(ruta)
+
+        cg, ax = lib("CoreGraphics"), lib("ApplicationServices")
+        cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
+        ax.AXIsProcessTrusted.restype = ctypes.c_bool
+        if not cg.CGPreflightScreenCaptureAccess():
+            try:
+                cg.CGRequestScreenCaptureAccess.restype = ctypes.c_bool
+                cg.CGRequestScreenCaptureAccess()
+            except Exception:
+                pass
+            avisos.append("Mac: falta el permiso de Grabación de pantalla (Ajustes del Sistema → Privacidad y seguridad). Reinicia Mando PC después.")
+        if not ax.AXIsProcessTrusted():
+            avisos.append("Mac: falta el permiso de Accesibilidad para mover el mouse y escribir (Ajustes del Sistema → Privacidad y seguridad).")
+    except Exception:
+        return []
+    return avisos
+
+
+def estado(nombre: str | None = None) -> dict:
+    d = {"host": nombre or socket.gethostname()}
     try:
         import psutil
 
@@ -533,6 +588,8 @@ def crear_app(cfg: dict) -> web.Application:
         raices = [Path.home().resolve()]
     tickets: dict[str, tuple[Path, float]] = {}
     atajos: list[dict] = cfg.get("atajos", [])
+    nombre = nombre_equipo(cfg)
+    avisos: list[str] = revisar_permisos_mac()
 
     def permitido(p: Path) -> bool:
         for r in raices:
@@ -571,7 +628,12 @@ def crear_app(cfg: dict) -> web.Application:
 
     # ---- páginas
     async def indice(request):
-        return web.FileResponse(WEB / "index.html")
+        import html as _h
+
+        pag = (WEB / "index.html").read_text("utf-8")
+        n = _h.escape(f"Mando · {nombre}", quote=True)
+        pag = pag.replace("<title>Mando PC</title>", f"<title>{n}</title>").replace('content="Mando PC">', f'content="{n}">')
+        return web.Response(text=pag, content_type="text/html")
 
     async def manifiesto(request):
         t = request.query.get("t", "")
@@ -579,7 +641,7 @@ def crear_app(cfg: dict) -> web.Application:
         if t and hmac.compare_digest(t.encode(), cfg["token"].encode()):
             inicio = "/#t=" + quote(t)
         data = {
-            "id": "/", "name": "Mando PC", "short_name": "Mando PC", "lang": "es",
+            "id": "/", "name": f"Mando · {nombre}", "short_name": f"Mando · {nombre}"[:12], "lang": "es",
             "start_url": inicio, "scope": "/", "display": "standalone", "orientation": "any",
             "background_color": "#0b0f14", "theme_color": "#0b0f14",
             "icons": [
@@ -740,7 +802,8 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
             "t": "hello", "version": VERSION, "os": {"Windows": "win", "Darwin": "mac"}.get(SISTEMA, "linux"),
             "monitores": len(mons), "monitor": sel["i"], "pantalla": {"w": sel["w"], "h": sel["h"]},
             "atajos": [{"n": a.get("nombre", "?"), "i": a.get("icono", "⚡")} for a in atajos],
-            **estado(),
+            "avisos": avisos,
+            **estado(nombre),
         }
 
     async def bucle_pantalla(ws: web.WebSocketResponse, cl: Cliente):
@@ -776,7 +839,7 @@ ol{{color:#c5d1e0;line-height:1.7}}</style>
         try:
             while not ws.closed:
                 await asyncio.sleep(15)
-                await ws.send_json({"t": "estado", **estado()})
+                await ws.send_json({"t": "estado", **estado(nombre)})
         except (asyncio.CancelledError, ConnectionResetError):
             pass
 
@@ -927,7 +990,9 @@ def main():
     puerto = int(cfg["puerto"])
 
     app = crear_app(cfg)
-    print(f"\n  Mando PC {VERSION} — {platform.node()} ({SISTEMA})")
+    if cfg.get("mantener_despierta", True):
+        mantener_despierta()
+    print(f"\n  Mando PC {VERSION} — {nombre_equipo(cfg)} ({ {'Darwin': 'macOS'}.get(SISTEMA, SISTEMA) })")
     print("  ───────────────────────────────────────────")
     for etiqueta, ip in direcciones_locales():
         print(f"  {etiqueta}:  http://{ip}:{puerto}")
